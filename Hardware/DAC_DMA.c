@@ -23,7 +23,6 @@ void GenSineTable(float Vpp, float offset, uint16_t Point)
   }
 }
 
-
 void GenSquareTable(float Vpp, float duty, float offset, uint16_t Point)
 {
   float off = 4095 * (offset / 3.3f); // 转换为 DAC 输出值

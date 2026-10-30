@@ -27,7 +27,16 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include "App_StateMachine.h"
+#include <stdio.h>
+
+#include "ADC_DMA.h"
+#include "message_UART.h"
+#include "HMI.h"
+#include "OSC_Trigger.h"
+#include "Config.h"
+#include "Fre_Measure.h"
+#include "FFT.h"
+#include "DAC_DMA.h"
 
 /* USER CODE END Includes */
 
@@ -49,11 +58,23 @@
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
+uint32_t *adc_value_buffer_u32;
+uint32_t adc_value_u32[ADC_NUMBER];
+static uint32_t adc_value_u32_HasFilter[ADC_NUMBER];
+static uint8_t print_frame[8 + ADC_NUMBER * 2];  // 电脑串口帧缓冲区
+static uint32_t adc_value_u32_HasScale[ADC_NUMBER];
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 /* USER CODE BEGIN PFP */
+int fputc(int ch, FILE *f)
+{
+  HAL_UART_Transmit(&huart1, (uint8_t *)&ch, 1, 1000);
+  return ch;
+}
+
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -94,7 +115,6 @@ int main(void)
   MX_ADC1_Init();
   MX_TIM2_Init();
   MX_USART1_UART_Init();
-  MX_USART3_UART_Init();
   MX_TIM3_Init();
   MX_ADC2_Init();
   MX_ADC3_Init();
@@ -102,15 +122,171 @@ int main(void)
   MX_DAC_Init();
   MX_TIM8_Init();
   /* USER CODE BEGIN 2 */
-  App_Init();
+  
+  uint8_t RxBuffer[16];             // 定义接收缓冲区
+  uint16_t count_1 = 0;             // 用于计数
+  message_init();                   // 初始化串口
+  Fre_Measure_Init();               // 初始化频率测量
+  ConfigAndData_Init();             // 初始化配置和数据
+  ADC_DMA_Start(OSC_Config.OSC_Fs); // 启动ADC
+  ADC_Change_Fs();                  // 改变ADC采样频率
+  FFT_Init();                       // 初始化FFT
+  DAC_DMA_Init();                   // 初始化DAC
+
+
+  
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-    App_Run();
+    if (message_Read(RxBuffer, 16, 1)) // 读取串口数据
+    {
+      if (HMI_ReceiveHandle(RxBuffer, 16) == 0) // 处理串口数据
+      {
+      }
+    }
+    if (OSC_Config.OSC_Enable) // 判断示波器是否使能
+    {
+      if (count_1 >= 100) // 判断定时
+      {
+        count_1 = 0;
+        // 无屏：不发送 HMI_SeedFrame_MeasureData，避免屏指令污染电脑数据流
+        if ((adc_value_buffer_u32 = ADC_ReadData_u32()) != NULL) // 判断ADC是否有数据
+        {
+          if (OSC_Config.OSC_Fs == 7200000)
+          {
+            ADC_MultiModeBufferConvert(adc_value_buffer_u32, adc_value_u32, ADC_BUFFER_MultiMode_SIZE);    // 交替采样数据的转换
+            Filter_IIR(adc_value_u32, adc_value_u32_HasFilter, 0.8);                                       // 滤波
+            ADC_DataHandle(adc_value_u32_HasFilter, 20, 730);                                              // 数据处理，获得Vpp等
+            Fre_Measure_Get_Fre(&OSC_MeasureData.Freq_TIM, &OSC_MeasureData.Duty);                         // 测量频率
+            Scale_X_Axis(adc_value_u32_HasFilter, adc_value_u32_HasScale, (float)OSC_Config.Scale_X_Axis); // 缩放
+          }
+          else
+          {
+            Filter_IIR(adc_value_buffer_u32, adc_value_u32_HasFilter, 0.4);                             // 滤波
+            ADC_DataHandle(adc_value_u32_HasFilter, 20, 730);                                           // 数据处理，获得Vpp等
+            Fre_Measure_Get_Fre(&OSC_MeasureData.Freq_TIM, &OSC_MeasureData.Duty);                      // 测量频率
+            Scale_X_Axis(adc_value_buffer_u32, adc_value_u32_HasScale, (float)OSC_Config.Scale_X_Axis); // 缩放
+          }
+          if (OSC_Config.OSC_Print_Enable) // 发送二进制帧到电脑
+          {
+            // ---- 波形帧 (0xAA 0xBB) ----
+            print_frame[0] = 0xAA; print_frame[1] = 0xBB; // 帧同步头
+            uint16_t len = ADC_NUMBER;
+            print_frame[2] = len & 0xFF;             // 点数低字节
+            print_frame[3] = (len >> 8) & 0xFF;      // 点数高字节
+            uint32_t fs_hz = OSC_Config.OSC_Fs;
+            print_frame[4] = fs_hz & 0xFF;            // 采样率[31:24]
+            print_frame[5] = (fs_hz >> 8) & 0xFF;
+            print_frame[6] = (fs_hz >> 16) & 0xFF;
+            print_frame[7] = (fs_hz >> 24) & 0xFF;    // 采样率[7:0]
+            uint32_t *pSrc = (OSC_Config.OSC_Fs == 7200000) ? adc_value_u32 : adc_value_buffer_u32;
+            for (int i = 0; i < ADC_NUMBER; i++)
+            {
+              uint16_t val = (uint16_t)(pSrc[i] & 0xFFF);
+              print_frame[8 + i * 2] = val & 0xFF;
+              print_frame[8 + i * 2 + 1] = (val >> 8) & 0xFF;
+            }
+            HAL_UART_Transmit(&huart1, print_frame, sizeof(print_frame), 500);
+
+            // ---- FFT频谱帧 (0xCC 0xDD) - 自动运行FFT并发送结果 ----
+            FFT_App(&OSC_MeasureData.Freq_FFT);
+            {
+              static uint8_t fft_frame[16 + (FFT_LENGTH / 2 + 1) * 4 + 16]; // 2+4+4+4+2 + 513*4 + 16(二三次谐波) = 2084B
+              uint32_t max_freq = OSC_Config.OSC_Fs / 2;
+              uint16_t fft_len = FFT_LENGTH / 2 + 1;  // 513
+              uint8_t *p;
+              // 同步头
+              fft_frame[0] = 0xCC; fft_frame[1] = 0xDD;
+              // max_freq (uint32 LE)
+              p = (uint8_t *)&max_freq;
+              fft_frame[2] = p[0]; fft_frame[3] = p[1];
+              fft_frame[4] = p[2]; fft_frame[5] = p[3];
+              // peak_freq (float32)
+              p = (uint8_t *)&OSC_MeasureData.Freq_FFT;
+              fft_frame[6] = p[0]; fft_frame[7] = p[1];
+              fft_frame[8] = p[2]; fft_frame[9] = p[3];
+              // peak_amp (float32)
+              p = (uint8_t *)&OSC_MeasureData.Freq_FFT_Amp;
+              fft_frame[10] = p[0]; fft_frame[11] = p[1];
+              fft_frame[12] = p[2]; fft_frame[13] = p[3];
+              // fft_len (uint16 LE)
+              p = (uint8_t *)&fft_len;
+              fft_frame[14] = p[0]; fft_frame[15] = p[1];
+              // FFT幅度数据 (float32数组)
+              for (uint16_t i = 0; i < fft_len; i++)
+              {
+                p = (uint8_t *)&output[i];
+                uint32_t idx = 16 + i * 4;
+                fft_frame[idx]     = p[0];
+                fft_frame[idx + 1] = p[1];
+                fft_frame[idx + 2] = p[2];
+                fft_frame[idx + 3] = p[3];
+              }
+              // ---- 帧尾追加：二次+三次谐波 频率+幅值 (float32 LE, 16字节) ----
+              // 布局: 16 + fft_len*4 + [h2_freq(4) | h2_amp(4) | h3_freq(4) | h3_amp(4)]
+              FFT_Harmonic_t harms[3];
+              FFT_GetHarmonics((float)OSC_Config.OSC_Fs, harms);
+              OSC_MeasureData.Freq_FFT_H2     = harms[1].freq;
+              OSC_MeasureData.Freq_FFT_H2_Amp = harms[1].amp;
+              OSC_MeasureData.Freq_FFT_H3     = harms[2].freq;
+              OSC_MeasureData.Freq_FFT_H3_Amp = harms[2].amp;
+              uint32_t tail = 16 + fft_len * 4;
+              p = (uint8_t *)&OSC_MeasureData.Freq_FFT_H2;       // h2_freq
+              fft_frame[tail] = p[0]; fft_frame[tail+1] = p[1]; fft_frame[tail+2] = p[2]; fft_frame[tail+3] = p[3];
+              p = (uint8_t *)&OSC_MeasureData.Freq_FFT_H2_Amp;   // h2_amp
+              fft_frame[tail+4] = p[0]; fft_frame[tail+5] = p[1]; fft_frame[tail+6] = p[2]; fft_frame[tail+7] = p[3];
+              p = (uint8_t *)&OSC_MeasureData.Freq_FFT_H3;       // h3_freq
+              fft_frame[tail+8] = p[0]; fft_frame[tail+9] = p[1]; fft_frame[tail+10] = p[2]; fft_frame[tail+11] = p[3];
+              p = (uint8_t *)&OSC_MeasureData.Freq_FFT_H3_Amp;   // h3_amp
+              fft_frame[tail+12] = p[0]; fft_frame[tail+13] = p[1]; fft_frame[tail+14] = p[2]; fft_frame[tail+15] = p[3];
+              HAL_UART_Transmit(&huart1, fft_frame, sizeof(fft_frame), 500);
+            }
+          }
+          if (!OSC_Config.OSC_Print_Enable) // 开启电脑打印时，跳过HMI屏幕的波形发送
+          {
+            if (OSC_Config.OSC_Auto_Enable == 1) // 判断是否开启自动测量，
+            {
+              Auto_Measure(); // 自动测量
+            }
+            else if (OSC_Config.OSC_FFT_Enable == 1) // 判断是否开启FFT
+            {
+              FFT_App(&OSC_MeasureData.Freq_FFT); // 进行FFT（基波）
+              // 检测基波+二次+三次谐波
+              FFT_Harmonic_t harms[3];
+              FFT_GetHarmonics((float)OSC_Config.OSC_Fs, harms);
+              OSC_MeasureData.Freq_FFT_H2     = harms[1].freq;
+              OSC_MeasureData.Freq_FFT_H2_Amp = harms[1].amp;
+              OSC_MeasureData.Freq_FFT_H3     = harms[2].freq;
+              OSC_MeasureData.Freq_FFT_H3_Amp = harms[2].amp;
+              HMI_SeedFrame_FFT(output, 512);     // 发送FFT数据
+            }
+            else
+            {
+              HMI_SeedFrame_Wave(adc_value_u32_HasScale, 800, ADC_NUMBER, 0);
+            }
+          }
+          ADC_Restart(OSC_Config.OSC_Fs); // 重新启动ADC
+        }
+      }
+    }
+    if (DAC_Param.HaveChange_Flag == 1) // 判断DAC有无修改参数
+    {
+      DAC_Param.HaveChange_Flag = 0;
+      if (OSC_Config.OSC_DAC_Enable == 1) // 判断DAC是否使能
+      {
+        DAC_DMA_ChangeOut(DAC_Param.type, DAC_Param.Freq, DAC_Param.VPP, DAC_Param.offset, DAC_Param.Duty); // 修改DAC参数
+        DAC_DMA_Start();                                                                                    // 启动DAC
+      }
+      else
+      {
+        DAC_DMA_Stop(); // 停止DAC
+      }
+    }
     HAL_Delay(1);
+    count_1++; // 计数值加1
 
     /* USER CODE END WHILE */
 

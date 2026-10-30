@@ -10,6 +10,7 @@ typedef struct
   uint8_t OSC_DAC_Enable;   // 是否进行DAC
   uint8_t OSC_Auto_Enable;  // 是否自动
   uint8_t OSC_Auto_Success; // 自动是否成功
+  uint8_t OSC_Print_Enable; // 串口打印波形数据开关
   uint32_t OSC_Fs;          // 采样频率
   uint8_t OSC_Fs_Index;     // 采样频率索引;
   uint16_t Scale_X_Axis;    // 横轴缩放比例
@@ -30,9 +31,14 @@ typedef struct
   float32_t VPP;  // 峰峰值
   float32_t VMax; // 最大值
   float32_t VMin; // 最小值
-  float Freq_TIM; // 频率
-  float Freq_FFT; // 频率
-  float Duty;     // 占空比
+  float Freq_TIM;   // 频率（定时器测量）
+  float Freq_FFT;   // 频率（FFT）基波
+  float Freq_FFT_Amp; // FFT峰值幅值
+  float Freq_FFT_H2;  // 二次谐波频率（FFT）
+  float Freq_FFT_H2_Amp; // 二次谐波幅值
+  float Freq_FFT_H3;  // 三次谐波频率（FFT）
+  float Freq_FFT_H3_Amp; // 三次谐波幅值
+  float Duty;       // 占空比
 } OSC_MeasureData_t;
 
 extern OSC_Config_t OSC_Config;

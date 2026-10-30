@@ -1,5 +1,4 @@
 #include "HMI.h"
-#include "App_StateMachine.h"
 
 /**
  * @brief  发送一帧数据
@@ -45,6 +44,8 @@ void HMI_SeedFrame_FFT(float *data, uint16_t len)
 {
   printf("n4.val=%d\xFF\xFF\xFF", (int)(OSC_Config.OSC_Fs / 2));
   printf("n5.val=%d\xFF\xFF\xFF", (int)(OSC_MeasureData.Freq_FFT + 0.5f));
+  printf("n6.val=%d\xFF\xFF\xFF", (int)(OSC_MeasureData.Freq_FFT_H2 + 0.5f)); // 二次谐波
+  printf("n7.val=%d\xFF\xFF\xFF", (int)(OSC_MeasureData.Freq_FFT_H3 + 0.5f)); // 三次谐波
   float32_t max = 0;
   uint32_t index = 0;
 
@@ -116,11 +117,34 @@ uint8_t HMI_ReceiveHandle(uint8_t *RxData, uint8_t Size)
     DAC_Param.HaveChange_Flag = 1;
     return 0;
   }
+  else if (RxData[0] == 0x12) // 串口打印波形数据开关 (0x00=开, 0x01=关)
+  {
+    OSC_Config.OSC_Print_Enable = (RxData[1] == 0x00) ? 1 : 0;
+    return 0;
+  }
   else if (RxData[0] == 0x01) // 设置采样频率
   {
-    /* Analysis sampling is fixed at 2 MSa/s to keep FFT calibration valid. */
-    OSC_Config.OSC_Fs = ADC_SAMPLE_RATE_HZ;
+    if (RxData[1] == 0x00)
+    {
+      if (OSC_Config.OSC_Fs_Index <= 0)
+      {
+        printf("n0.val=%d\xFF\xFF\xFF", OSC_Config.OSC_Fs);
+        return 1;
+      }
+      OSC_Config.OSC_Fs_Index--;
+    }
+    else if (RxData[1] == 0x01)
+    {
+      if (OSC_Config.OSC_Fs_Index >= FS_NUM - 1)
+      {
+        printf("n0.val=%d\xFF\xFF\xFF", OSC_Config.OSC_Fs);
+        return 1;
+      }
+      OSC_Config.OSC_Fs_Index++;
+    }
+    Config_Update();
     ADC_Change_Fs();
+    // printf("ADC->CCR=0x%08X\n", ADC->CCR);
     printf("n0.val=%d\xFF\xFF\xFF", OSC_Config.OSC_Fs);
     return 0;
   }
@@ -202,24 +226,6 @@ uint8_t HMI_ReceiveHandle(uint8_t *RxData, uint8_t Size)
     }
     DAC_Param.HaveChange_Flag = 1;
     return 0;
-  }
-  else if (RxData[0] == 0x20) // Set analysis display mode
-  {
-    if (RxData[1] < APP_MODE_COUNT)
-    {
-      App_SetMode((AppMode_t)RxData[1]);
-      return 0;
-    }
-    return 1;
-  }
-  else if (RxData[0] == 0x21) // Set reconstructed waveform periods
-  {
-    if ((RxData[1] == 1U) || (RxData[1] == 3U))
-    {
-      App_SetDisplayCycles(RxData[1]);
-      return 0;
-    }
-    return 1;
   }
   return 2;
 }

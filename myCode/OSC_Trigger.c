@@ -23,7 +23,6 @@ int16_t OSC_Rising_Edge_Trigger(uint32_t *data, int size, int16_t threshold, int
   return -1;
 }
 
-
 // 下降沿触发可类似实现
 int16_t OSC_Falling_Edge_Trigger(uint32_t *data, int size, int16_t threshold, int16_t hysteresis)
 {

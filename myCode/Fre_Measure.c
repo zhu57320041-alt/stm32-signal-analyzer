@@ -89,7 +89,7 @@ uint8_t Fre_Measure_Get_Fre(float *frequency, float *duty)
 {
   if (period_cnt > 0)
   {
-    *frequency = TIM_FREQ / (period_cnt + 1) * 100;
+    *frequency = TIM_FREQ / (period_cnt + 1);
     *duty = (float)(high_cnt + 1) / (period_cnt + 1) * 100;
     return 1;
   }
