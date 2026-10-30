@@ -1,0 +1,39 @@
+# ---------- Keil MDK 编译产物 ----------
+Objects/
+Listings/
+DebugConfig/
+RTE/_*/
+*.hex
+*.bin
+*.axf
+*.elf
+*.map
+*.dep
+*.o
+*.d
+*.crf
+*.lnp
+*.iex
+*.sct
+*.lst
+*.htm
+*.bak
+*.uvguix.*
+*.uvoptx
+
+# ---------- 编辑器 / 本地配置 ----------
+.vscode/
+*.log
+*.log.lock
+
+# ---------- ST 官方代码（体积大，可用 OSC.ioc 重新生成）----------
+# 想让仓库只保留自己写的代码时，取消下面两行注释
+# Drivers/
+# Middlewares/
+
+# ---------- 系统文件 ----------
+Thumbs.db
+desktop.ini
+.DS_Store
+~$*
+__pycache__/
